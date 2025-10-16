@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Duck Hunt: Pro Edition</title>
+<style>
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #89c9ff, #4aa3f0);
+  font-family: 'Press Start 2P', cursive;
+  color: #fff;
+  text-align: center;
+  overflow: hidden;
+}
+h1 {
+  text-shadow: 0 0 10px #000;
+  margin-top: 10px;
+}
+canvas {
+  background: linear-gradient(to top, #3b8c3b 20%, #8cd0ff 80%);
+  border: 8px solid #2c3e50;
+  border-radius: 12px;
+  box-shadow: 0 0 30px rgba(0,0,0,0.5);
+  display: block;
+  margin: 20px auto;
+}
+#game-over {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.9);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #f1c40f;
+}
+input {
+  padding: 8px;
+  font-family: 'Press Start 2P', cursive;
+  font-size: 10px;
+  margin-top: 10px;
+  text-transform: uppercase;
+}
+button {
+  margin-top: 15px;
+  padding: 10px 20px;
+  background: #2ecc71;
+  border: none;
+  border-radius: 5px;
+  font-family: 'Press Start 2P', cursive;
+  cursor: pointer;
+  box-shadow: 0 3px #27ae60;
+}
+button:hover {
+  background: #27ae60;
+}
+#ranking {
+  text-align: left;
+  margin-top: 15px;
+}
+.flash {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: black;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+<h1>🦆 Duck Hunt: Pro Edition</h1>
+<canvas id="game" width="800" height="450"></canvas>
+
+<div id="game-over">
+  <h2>🎯 ¡Juego Terminado!</h2>
+  <p>Puntuación final: <span id="final-score">0</span></p>
+  <p>Escaparon 3 patos...</p>
+  <div>
+    <label>Tu nombre:</label><br />
+    <input type="text" id="player-name" maxlength="10" placeholder="Jugador" />
+  </div>
+  <button id="save-score">Guardar Puntuación</button>
+  <div id="ranking"></div>
+  <button id="restart">Reiniciar</button>
+</div>
+
+<div class="flash" id="flash"></div>
+
+<script>
+// === CONFIGURACIÓN DEL JUEGO ===
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let ducks = [];
+let score = 0;
+let missed = 0;
+let speedMultiplier = 1.2;
+let duckSpawnRate = 2000;
+let lastSpawn = 0;
+let gameOver = false;
+const flash = document.getElementById('flash');
+
+// === COLORES DE PATOS Y VALORES ===
+const duckTypes = [
+  {color: 'yellow', points: 50},
+  {color: 'brown', points: 75},
+  {color: 'green', points: 100},
+  {color: 'red', points: 150}
+];
+
+// === AUDIO ===
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playBeep(freq, duration) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.value = freq;
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+  osc.stop(audioCtx.currentTime + duration);
+}
+
+// === OBJETO PATO ===
+class Duck {
+  constructor() {
+    const type = duckTypes[Math.floor(Math.random()*duckTypes.length)];
+    this.x = -50;
+    this.y = Math.random() * 250 + 100;
+    this.color = type.color;
+    this.points = type.points;
+    this.speed = (2 + Math.random()*2) * speedMultiplier;
+    this.size = 40;
+  }
+  update() {
+    this.x += this.speed;
+    this.y += Math.sin(this.x/40) * 0.5;
+    if (this.x > canvas.width + 50) {
+      missed++;
+      ducks.splice(ducks.indexOf(this),1);
+      if (missed >= 3) endGame();
+    }
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.ellipse(this.x, this.y, this.size, this.size*0.6, 0, 0, Math.PI*2);
+    ctx.fillStyle = this.color;
+    ctx.fill();
+    ctx.strokeStyle = 'black';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Pico
+    ctx.fillStyle = 'orange';
+    ctx.fillRect(this.x + this.size, this.y - 5, 10, 10);
+    // Ala
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath();
+    ctx.ellipse(this.x, this.y, this.size/2, this.size/3, Math.PI/4, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+// === DIBUJAR FONDO ===
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+  grad.addColorStop(0,'#8cd0ff');
+  grad.addColorStop(1,'#3b8c3b');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  // Montañas
+  ctx.fillStyle = '#4c6b50';
+  ctx.beginPath();
+  ctx.moveTo(0,300);
+  ctx.lineTo(150,200);
+  ctx.lineTo(300,300);
+  ctx.lineTo(450,180);
+  ctx.lineTo(600,300);
+  ctx.lineTo(800,250);
+  ctx.lineTo(800,450);
+  ctx.lineTo(0,450);
+  ctx.closePath();
+  ctx.fill();
+  // Agua
+  ctx.fillStyle = '#4cb3ff';
+  ctx.fillRect(0,350,canvas.width,100);
+  ctx.fillStyle = '#1f78d1';
+  for(let i=0;i<canvas.width;i+=40){
+    ctx.fillRect(i,350+Math.sin(Date.now()/300+i)*5,40,2);
+  }
+}
+
+// === EVENTO DISPARO ===
+canvas.addEventListener('click', (e)=>{
+  if (gameOver) return;
+  flash.style.opacity = 1;
+  setTimeout(()=> flash.style.opacity = 0,100);
+  playBeep(200,0.1);
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  ducks.forEach((d,i)=>{
+    if(mx>d.x-d.size && mx<d.x+d.size && my>d.y-d.size && my<d.y+d.size){
+      score += d.points;
+      ducks.splice(i,1);
+      playBeep(600,0.2);
+    }
+  });
+});
+
+// === BUCLE PRINCIPAL ===
+let lastTime = 0;
+function gameLoop(timestamp){
+  if(gameOver) return;
+  const delta = timestamp - lastTime;
+  lastTime = timestamp;
+  drawBackground();
+  ducks.forEach(d=>{d.update();d.draw();});
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`Puntuación: ${score}`,20,30);
+  ctx.fillText(`Fallados: ${missed}/3`,20,50);
+  if(timestamp - lastSpawn > duckSpawnRate){
+    ducks.push(new Duck());
+    lastSpawn = timestamp;
+    // aumenta velocidad y frecuencia
+    speedMultiplier += 0.05;
+    if(duckSpawnRate>800) duckSpawnRate -= 50;
+  }
+  requestAnimationFrame(gameLoop);
+}
+
+// === FINAL DEL JUEGO ===
+function endGame(){
+  gameOver = true;
+  document.getElementById('final-score').textContent = score;
+  document.getElementById('game-over').style.display = 'flex';
+}
+
+// === RANKING ===
+const saveBtn = document.getElementById('save-score');
+saveBtn.onclick = ()=>{
+  const name = document.getElementById('player-name').value || 'ANON';
+  const record = {name, score};
+  const stored = JSON.parse(localStorage.getItem('duckhunt-scores')||'[]');
+  stored.push(record);
+  stored.sort((a,b)=>b.score - a.score);
+  if(stored.length>10) stored.splice(10);
+  localStorage.setItem('duckhunt-scores', JSON.stringify(stored));
+  showRanking();
+};
+
+function showRanking(){
+  const ranking = document.getElementById('ranking');
+  const stored = JSON.parse(localStorage.getItem('duckhunt-scores')||'[]');
+  ranking.innerHTML = '<h3>🏆 TOP 10 JUGADORES</h3><ol>' +
+    stored.map(p=>`<li>${p.name} - ${p.score}</li>`).join('') + '</ol>';
+}
+
+// === REINICIAR ===
+document.getElementById('restart').onclick = ()=>{
+  ducks = [];
+  score = 0;
+  missed = 0;
+  speedMultiplier = 1.2;
+  duckSpawnRate = 2000;
+  lastSpawn = 0;
+  gameOver = false;
+  document.getElementById('game-over').style.display = 'none';
+  requestAnimationFrame(gameLoop);
+};
+
+// === INICIO ===
+ctx.font = "12px 'Press Start 2P'";
+ctx.fillStyle = '#fff';
+ctx.fillText("Click para iniciar", canvas.width/2-100, canvas.height/2);
+canvas.addEventListener('click', startOnce,{once:true});
+function startOnce(){
+  if(audioCtx.state==='suspended') audioCtx.resume();
+  requestAnimationFrame(gameLoop);
+}
+</script>
+</body>
+</html>
